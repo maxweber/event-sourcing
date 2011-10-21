@@ -33,43 +33,56 @@
 
 (def events [event0 event1 event2 event3 event4])
 
-(def handler0 (if-event "shoppingcart_created"
-                        (fn [model event]
-                          (assoc model
-                            :_aggregate (:_aggregate event)
-                            :_type "shoppingcart"))))
+(def handler0
+     (fn [model event]
+       (assoc model
+         :_aggregate (:_aggregate event)
+         :_type "shoppingcart")))
 
-(def handler1 (if-event "shoppingcart_item_added"
-                        (fn [model event]
-                          (let [item-id (:item event)
-                                quantity (get-in model [:items item-id] 0)]
-                            (assoc-in model [:items item-id] (inc quantity))))))
+(defn handler1 [model event]
+  (let [item-id (:item event)
+        quantity (get-in model [:items item-id] 0)]
+    (assoc-in model [:items item-id] (inc quantity))))
 
-(def handler2 (if-event "shoppingcart_item_removed"
-                        (fn [model event]
-                          (let [item-id (:item event)
-                                quantity (get-in model [:items item-id])
-                                new-quantity (dec quantity)]
-                            (if (= 0 new-quantity)
-                              (dissoc-in model [:items item-id])
-                              (assoc-in model [:items item-id] new-quantity))))))
+(defn handler2 [model event]
+  (let [item-id (:item event)
+        quantity (get-in model [:items item-id])
+        new-quantity (dec quantity)]
+    (if (= 0 new-quantity)
+      (dissoc-in model [:items item-id])
+      (assoc-in model [:items item-id] new-quantity))))
 
-(def handler3 (if-event #(re-find #"shoppingcart_item_.*" (:_event %))
-                        (fn [model event]
-                          (let [event-name (:_event event)
-                                item-count (:item-count model 0)
-                                item-count (cond
-                                            (= event-name "shoppingcart_item_added") (inc item-count)
-                                            (= event-name "shoppingcart_item_removed") (dec item-count)
-                                            :else item-count)]
-                            (assoc model :item-count item-count)))))
+(defn handler3 [model event]
+  (let [event-name (:_event event)
+        item-count (:item-count model 0)
+        item-count (cond
+                    (= event-name "shoppingcart_item_added") (inc item-count)
+                    (= event-name "shoppingcart_item_removed") (dec item-count)
+                    :else item-count)]
+    (assoc model :item-count item-count)))
 
-(def handlers [handler0 handler1 handler2 handler3])
+(defn event-name? [event-name]
+  (fn [event]
+    (= event-name (:_event event))))
+
+(defn shoppingcart_item-event? [event]
+  (re-find #"shoppingcart_item_.*" (:_event event)))
+
+(def handler-assignment
+     [[(event-name? "shoppingcart_created") [handler0]]
+      [(event-name? "shoppingcart_item_added") handler1]
+      [(event-name? "shoppingcart_item_removed") handler2]
+      [shoppingcart_item-event? handler3]
+      [(constantly true) (version-handler :_version :_number)]])
+
+(defn get-handlers [event]
+  (flatten (map second (filter #((first %) event) handler-assignment))))
 
 (describe "Event sourcing"
   (given [event-number-key :_number
           extract #(select-keys % [:_aggregate :_type :items])
-          replay-events (replay-events-fn handlers :_event :_version event-number-key)
+          replay (replay-fn get-handlers)
+          replay-events (replay-events-fn replay)
           expected-current-state {:_aggregate aggregate-id
                                   :_type "shoppingcart"
                                   :items {item1-id 2}}]
@@ -90,7 +103,8 @@
             :items {item1-id 2
                     item2-id 1}}
            (extract state)))
-      (given [current-state (replay-events state events)]
+      (given [events (relevant-events (:_version state) :_number events)
+              current-state (replay-events state events)]
         (it "should can build the current state starting from a snapshot state"
           (= expected-current-state
              (extract current-state)))))))
