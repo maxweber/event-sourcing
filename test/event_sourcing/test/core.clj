@@ -54,7 +54,17 @@
                               (dissoc-in model [:items item-id])
                               (assoc-in model [:items item-id] new-quantity))))))
 
-(def handlers [handler0 handler1 handler2])
+(def handler3 (if-event #(re-find #"shoppingcart_item_.*" (:_event %))
+                        (fn [model event]
+                          (let [event-name (:_event event)
+                                item-count (:item-count model 0)
+                                item-count (cond
+                                            (= event-name "shoppingcart_item_added") (inc item-count)
+                                            (= event-name "shoppingcart_item_removed") (dec item-count)
+                                            :else item-count)]
+                            (assoc model :item-count item-count)))))
+
+(def handlers [handler0 handler1 handler2 handler3])
 
 (describe "Event sourcing"
   (given [event-number-key :_number
@@ -68,7 +78,9 @@
         (= expected-current-state
            (extract current-state)))
       (it "should set the version-key attribute of the model to the number of the last applied event"
-        (= (:_number (last events)) (:_version current-state))))
+        (= (:_number (last events)) (:_version current-state)))
+      (it "should can have handlers which process multiple kinds of events"
+        (= 2 (:item-count current-state))))
     (given [version 3
             events-till-version-3 (take-while (to-version? version event-number-key) events)
             state (replay-events {} events-till-version-3)]

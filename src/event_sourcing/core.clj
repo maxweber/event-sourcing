@@ -1,7 +1,10 @@
 (ns event-sourcing.core)
 
-(defn if-event [event-name f]
-  (vary-meta f assoc ::event event-name))
+(defn if-event [relevant-event f]
+  {:pre [(or (fn? relevant-event) (string? relevant-event))]}
+  (if (fn? relevant-event)
+    (vary-meta f assoc ::event? relevant-event)
+    (vary-meta f assoc ::event relevant-event)))
 
 (defn- apply-handlers [handlers model event]
   (if handlers
@@ -9,13 +12,21 @@
               (handler model event)) model handlers)
     model))
 
+(defn- prepare-handlers [handlers]
+  (reduce (fn [m handler]
+            (let [relevant-event (::event (meta handler))]
+              (update-in m [relevant-event] #(vec (conj % handler))))) {} handlers))
+
 (defn replay-fn [handlers event-key version-key event-number-key]
-  (let [handlers (reduce (fn [m handler]
-                           (let [event-name (::event (meta handler))]
-                             (update-in m [event-name] #(vec (conj % handler))))) {} handlers)]
+  (let [handlers-per-event-name (prepare-handlers (filter #(::event (meta %)) handlers))
+        handlers-event-predicate (filter #(::event? (meta %)) handlers)
+        relevant-handlers (fn [event]
+                            (let [event-name (get event event-key)]
+                              (concat (get handlers-per-event-name event-name)
+                                      (filter #((::event? (meta %)) event) handlers-event-predicate))))]
     (fn [model event]
       (let [event-name (get event event-key)
-            handlers (get handlers event-name)
+            handlers (relevant-handlers event)
             new-model (apply-handlers handlers model event)]
         (assoc new-model version-key (get event event-number-key))))))
 
