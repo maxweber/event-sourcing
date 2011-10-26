@@ -1,5 +1,6 @@
 (ns event-sourcing.test.core
   (:use event-sourcing.core
+        event-sourcing.handler
         clojure.contrib.core
         [lazytest.describe
          :only [describe it given do-it using testing]]
@@ -72,39 +73,47 @@
      [[(event-name? "shoppingcart_created") [handler0]]
       [(event-name? "shoppingcart_item_added") handler1]
       [(event-name? "shoppingcart_item_removed") handler2]
-      [shoppingcart_item-event? handler3]
-      [(constantly true) (version-handler :_version :_number)]])
+      [shoppingcart_item-event? handler3]])
 
 (defn get-handlers [event]
   (flatten (map second (filter #((first %) event) handler-assignment))))
 
+(defn custom-position-fn [model-or-event]
+  (if (:_event model-or-event)
+    (:_number model-or-event)
+    (:_version model-or-event -1)))
+
+(defn custom-transfer-position-fn [model event]
+  (assoc model :_version (:_number event)))
+
 (describe "Event sourcing"
-  (given [event-number-key :_number
-          extract #(select-keys % [:_aggregate :_type :items])
+  (given [extract #(select-keys % [:_aggregate :_type :items])
           replay (replay-fn get-handlers)
-          replay-events (replay-events-fn replay)
+          load-state (load-state-fn replay custom-transfer-position-fn)
+          model {}
+          relevant-events (events-current-state model events custom-position-fn)
           expected-current-state {:_aggregate aggregate-id
                                   :_type "shoppingcart"
                                   :items {item1-id 2}}]
-    (given [current-state (replay-events {} events)]
+    (given [current-state (load-state model relevant-events)]
       (it "should build the current state out of a stream of events"
         (= expected-current-state
            (extract current-state)))
-      (it "should set the version-key attribute of the model to the number of the last applied event"
+      (it "should set the position entry of the model to the position entry of the last applied event"
         (= (:_number (last events)) (:_version current-state)))
       (it "should can have handlers which process multiple kinds of events"
         (= 2 (:item-count current-state))))
-    (given [version 3
-            events-till-version-3 (take-while (to-version? version event-number-key) events)
-            state (replay-events {} events-till-version-3)]
-      (it "should can build the state of a given version"
+    (given [historic-version 3
+            relevant-events (events-historic-state model events historic-version custom-position-fn)
+            historic-model (load-state model relevant-events)]
+      (it "should can build a historic state"
         (= {:_aggregate aggregate-id
             :_type "shoppingcart"
             :items {item1-id 2
                     item2-id 1}}
-           (extract state)))
-      (given [events (relevant-events (:_version state) :_number events)
-              current-state (replay-events state events)]
-        (it "should can build the current state starting from a snapshot state"
+           (extract historic-model)))
+      (given [relevant-events (events-current-state historic-model events custom-position-fn)
+              current-state (load-state historic-model relevant-events)]
+        (it "should can build the current state starting from a snapshot/historic state"
           (= expected-current-state
              (extract current-state)))))))
