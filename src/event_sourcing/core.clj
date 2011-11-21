@@ -1,5 +1,5 @@
 (ns event-sourcing.core
-  (:use [event-sourcing.handler :only [transfer-handler]]))
+  (:use helpers.core))
 
 (def ^{:dynamic true} *position-keyword* :_pos)
 
@@ -7,11 +7,11 @@
   (get model-or-event *position-keyword* -1))
 
 (defn transfer-position-fn [model last-event]
-  (assoc model *position-keyword* last-event))
+  (assoc model *position-keyword* (get last-event *position-keyword*)))
 
 (defn replay-fn [get-handlers]
   (fn [model event]
-    (let [handlers (get-handlers event)]
+    (let [handlers (remove nil? (into-seq (get-handlers event)))]
       (reduce (fn [model handler]
                 (handler model event)) model handlers))))
 
@@ -21,7 +21,7 @@
        (let [model (reduce replay model events)]
          (transfer-position-fn model (last events)))))
   ([replay]
-     (load-state-fn transfer-position-fn)))
+     (load-state-fn replay transfer-position-fn)))
 
 (defn events-current-state
   ([model events position-fn]
